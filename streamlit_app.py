@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
 from PIL import Image
 import io
 
@@ -81,37 +80,80 @@ if df is not None:
         st.write("### Statistical Summary")
         st.dataframe(df[['temperature', 'x_rms_vel', 'z_rms_vel']].describe())
 
-    # Distributions (Interactive with Plotly)
+    # Distributions (Vega-Lite Histogram)
     with st.expander("Distributions"):
-        fig = go.Figure()
-        fig.add_trace(go.Histogram(x=df['temperature'], name='Temperature', nbinsx=50, marker_color='red', opacity=0.6))
-        fig.add_trace(go.Histogram(x=df['x_rms_vel'], name='X RMS Velocity', nbinsx=50, marker_color='blue', opacity=0.6))
-        fig.add_trace(go.Histogram(x=df['z_rms_vel'], name='Z RMS Velocity', nbinsx=50, marker_color='green', opacity=0.6))
-        fig.update_layout(
-            title="Sensor Data Distributions",
-            xaxis_title="Value",
-            yaxis_title="Count",
-            barmode='overlay',
-            hovermode='x unified'
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        # Prepare data for Vega-Lite (melt the dataframe for layered histograms)
+        melted_df = df[['temperature', 'x_rms_vel', 'z_rms_vel']].melt(var_name='metric', value_name='value')
+        
+        vega_spec = {
+            "layer": [
+                {
+                    "mark": {"type": "bar", "opacity": 0.6},
+                    "encoding": {
+                        "x": {
+                            "field": "value",
+                            "bin": {"maxbins": 50},
+                            "type": "quantitative",
+                            "title": "Value"
+                        },
+                        "y": {
+                            "aggregate": "count",
+                            "type": "quantitative",
+                            "title": "Count"
+                        },
+                        "color": {
+                            "field": "metric",
+                            "type": "nominal",
+                            "scale": {
+                                "domain": ["temperature", "x_rms_vel", "z_rms_vel"],
+                                "range": ["red", "blue", "green"]
+                            },
+                            "legend": {"title": "Metric"}
+                        }
+                    }
+                }
+            ],
+            "title": "Sensor Data Distributions",
+            "data": {"values": melted_df.to_dict('records')}
+        }
+        st.vega_lite_chart(vega_spec, use_container_width=True)
 
-    # Correlation Heatmap (Retained as static for simplicity, but could use Plotly)
+    # Correlation Heatmap (Vega-Lite Heatmap)
     with st.expander("Correlation Heatmap"):
-        import seaborn as sns
-        import matplotlib.pyplot as plt
-        def plot_correlation():
-            plt.figure(figsize=(10, 6))
-            sns.heatmap(df.drop(columns=["timestamp"]).corr(), annot=True, cmap='coolwarm', fmt='.2f')
-            plt.title("Feature Correlation")
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            plt.close()
-            return Image.open(buf)
-        st.image(plot_correlation())
+        # Compute correlation matrix and prepare for Vega-Lite
+        corr_matrix = df.drop(columns=["timestamp"]).corr().reset_index().melt(id_vars='index', var_name='variable', value_name='correlation')
+        
+        vega_spec_heatmap = {
+            "mark": "rect",
+            "encoding": {
+                "x": {
+                    "field": "index",
+                    "type": "nominal",
+                    "title": "Variable"
+                },
+                "y": {
+                    "field": "variable",
+                    "type": "nominal",
+                    "title": "Variable"
+                },
+                "color": {
+                    "field": "correlation",
+                    "type": "quantitative",
+                    "scale": {"scheme": "redblue", "domain": [-1, 1]},
+                    "legend": {"title": "Correlation"}
+                },
+                "tooltip": [
+                    {"field": "index", "type": "nominal", "title": "Variable X"},
+                    {"field": "variable", "type": "nominal", "title": "Variable Y"},
+                    {"field": "correlation", "type": "quantitative", "title": "Correlation", "format": ".2f"}
+                ]
+            },
+            "title": "Feature Correlation",
+            "data": {"values": corr_matrix.to_dict('records')}
+        }
+        st.vega_lite_chart(vega_spec_heatmap, use_container_width=True)
 
-    # Degradation Trends (Interactive with Streamlit line_chart)
+    # Degradation Trends (Streamlit Line Chart)
     with st.expander("Degradation Trends"):
         trend_df = df[['timestamp', 'temperature', 'x_rms_vel', 'z_rms_vel']].set_index('timestamp')
         st.line_chart(trend_df, use_container_width=True)
@@ -120,7 +162,7 @@ if df is not None:
         st.write(f"- X RMS Velocity: {thresholds['x_rms_vel']:.2f}")
         st.write(f"- Z RMS Velocity: {thresholds['z_rms_vel']:.2f}")
 
-    # RUL Charts (Interactive with Plotly)
+    # RUL Charts (Plotly Line Charts)
     with st.expander("RUL Charts"):
         col1, col2, col3 = st.columns(3)
         
@@ -142,7 +184,7 @@ if df is not None:
                            color_discrete_sequence=['green'])
             st.plotly_chart(fig_z, use_container_width=True)
 
-    # RUL Prediction (Interactive Bar Chart with Plotly)
+    # RUL Prediction (Vega-Lite Bar Chart)
     with st.expander("Predict RUL from Input"):
         temp = st.slider("Temperature", min_value=0.0, max_value=150.0, step=0.1)
         x_vel = st.slider("X RMS Velocity", min_value=0.0, max_value=1.5, step=0.01)
@@ -154,21 +196,43 @@ if df is not None:
             pred_z = max(0, 100 - (z_vel * 0.6) + np.random.uniform(-5, 5))
             cum_rul = min(pred_temp, pred_x, pred_z)
 
-            # Interactive bar chart
-            fig_rul = go.Figure(data=[
-                go.Bar(x=['Temperature', 'X RMS Velocity', 'Z RMS Velocity', 'Cumulative'],
-                       y=[pred_temp, pred_x, pred_z, cum_rul],
-                       marker_color=['red', 'blue', 'green', 'purple'],
-                       text=[f'{val:.1f}%' for val in [pred_temp, pred_x, pred_z, cum_rul]],
-                       textposition='auto')
-            ])
-            fig_rul.update_layout(
-                title="Predicted RUL Comparison",
-                yaxis_title="RUL (%)",
-                yaxis_range=[0, 100],
-                showlegend=False
-            )
-            st.plotly_chart(fig_rul, use_container_width=True)
+            # Prepare data for Vega-Lite bar chart
+            rul_data = [
+                {"metric": "Temperature", "rul": pred_temp, "color": "red"},
+                {"metric": "X RMS Velocity", "rul": pred_x, "color": "blue"},
+                {"metric": "Z RMS Velocity", "rul": pred_z, "color": "green"},
+                {"metric": "Cumulative", "rul": cum_rul, "color": "purple"}
+            ]
+
+            vega_spec_bar = {
+                "mark": "bar",
+                "encoding": {
+                    "x": {
+                        "field": "metric",
+                        "type": "nominal",
+                        "title": "Metric"
+                    },
+                    "y": {
+                        "field": "rul",
+                        "type": "quantitative",
+                        "title": "RUL (%)",
+                        "scale": {"domain": [0, 100]}
+                    },
+                    "color": {
+                        "field": "color",
+                        "type": "nominal",
+                        "scale": {"range": ["red", "blue", "green", "purple"]},
+                        "legend": None
+                    },
+                    "tooltip": [
+                        {"field": "metric", "type": "nominal", "title": "Metric"},
+                        {"field": "rul", "type": "quantitative", "title": "RUL (%)", "format": ".1f"}
+                    ]
+                },
+                "title": "Predicted RUL Comparison",
+                "data": {"values": rul_data}
+            }
+            st.vega_lite_chart(vega_spec_bar, use_container_width=True)
 
             alert = ""
             if cum_rul < 10:
