@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
+from PIL import Image
 import io
-from PIL import Image  # Corrected import from 'pil' to 'PIL'
 
 # Set page config
 st.set_page_config(page_title="Industrial Equipment Monitoring & RUL Prediction", layout="wide")
@@ -15,18 +15,6 @@ thresholds = {}
 thresholds_rul = {}
 operating_hours_per_day = 16
 estimated_total_lifespan_hours = 5000
-
-# Helper function to create plot as image
-def create_plot_image(plot_function):
-    buf = io.BytesIO()  # Fixed capitalization
-    plt.figure(figsize=(10, 6))
-    plot_function()
-    plt.tight_layout()
-    plt.savefig(buf, format='png')
-    buf.seek(0)
-    img = Image.open(buf)
-    plt.close()
-    return img
 
 # Load dataset function
 def load_dataset(uploaded_file):
@@ -93,66 +81,68 @@ if df is not None:
         st.write("### Statistical Summary")
         st.dataframe(df[['temperature', 'x_rms_vel', 'z_rms_vel']].describe())
 
-    # Distributions
+    # Distributions (Interactive with Plotly)
     with st.expander("Distributions"):
-        def plot_distributions():
-            sns.histplot(df['temperature'], bins=50, kde=True, color='r', label='Temperature')
-            sns.histplot(df['x_rms_vel'], bins=50, kde=True, color='b', label='X RMS Velocity')
-            sns.histplot(df['z_rms_vel'], bins=50, kde=True, color='g', label='Z RMS Velocity')
-            plt.legend()
-            plt.title("Sensor Data Distributions")
-        st.image(create_plot_image(plot_distributions))
+        fig = go.Figure()
+        fig.add_trace(go.Histogram(x=df['temperature'], name='Temperature', nbinsx=50, marker_color='red', opacity=0.6))
+        fig.add_trace(go.Histogram(x=df['x_rms_vel'], name='X RMS Velocity', nbinsx=50, marker_color='blue', opacity=0.6))
+        fig.add_trace(go.Histogram(x=df['z_rms_vel'], name='Z RMS Velocity', nbinsx=50, marker_color='green', opacity=0.6))
+        fig.update_layout(
+            title="Sensor Data Distributions",
+            xaxis_title="Value",
+            yaxis_title="Count",
+            barmode='overlay',
+            hovermode='x unified'
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    # Correlation Heatmap
+    # Correlation Heatmap (Retained as static for simplicity, but could use Plotly)
     with st.expander("Correlation Heatmap"):
+        import seaborn as sns
+        import matplotlib.pyplot as plt
         def plot_correlation():
+            plt.figure(figsize=(10, 6))
             sns.heatmap(df.drop(columns=["timestamp"]).corr(), annot=True, cmap='coolwarm', fmt='.2f')
             plt.title("Feature Correlation")
-        st.image(create_plot_image(plot_correlation))
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png')
+            buf.seek(0)
+            plt.close()
+            return Image.open(buf)
+        st.image(plot_correlation())
 
-    # Degradation Trends
+    # Degradation Trends (Interactive with Streamlit line_chart)
     with st.expander("Degradation Trends"):
-        def plot_degradation():
-            plt.plot(df['temperature'], label='Temperature', color='r', alpha=0.6)
-            plt.axhline(thresholds['temperature'], color='r', linestyle='--')
-            plt.plot(df['x_rms_vel'], label='X RMS Velocity', color='b', alpha=0.6)
-            plt.axhline(thresholds['x_rms_vel'], color='b', linestyle='--')
-            plt.plot(df['z_rms_vel'], label='Z RMS Velocity', color='g', alpha=0.6)
-            plt.axhline(thresholds['z_rms_vel'], color='g', linestyle='--')
-            plt.legend()
-            plt.title("Sensor Degradation Over Time")
-        st.image(create_plot_image(plot_degradation))
+        trend_df = df[['timestamp', 'temperature', 'x_rms_vel', 'z_rms_vel']].set_index('timestamp')
+        st.line_chart(trend_df, use_container_width=True)
+        st.markdown("**Thresholds:**")
+        st.write(f"- Temperature: {thresholds['temperature']:.2f}")
+        st.write(f"- X RMS Velocity: {thresholds['x_rms_vel']:.2f}")
+        st.write(f"- Z RMS Velocity: {thresholds['z_rms_vel']:.2f}")
 
-    # RUL Charts
+    # RUL Charts (Interactive with Plotly)
     with st.expander("RUL Charts"):
         col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            fig_temp = px.line(df, x=df.index, y='temperature_rul', title='Temperature RUL',
+                             labels={'temperature_rul': 'RUL (%)', 'index': 'Index'},
+                             color_discrete_sequence=['red'])
+            st.plotly_chart(fig_temp, use_container_width=True)
+        
+        with col2:
+            fig_x = px.line(df, x=df.index, y='x_rms_vel_rul', title='X RMS Velocity RUL',
+                           labels={'x_rms_vel_rul': 'RUL (%)', 'index': 'Index'},
+                           color_discrete_sequence=['blue'])
+            st.plotly_chart(fig_x, use_container_width=True)
+        
+        with col3:
+            fig_z = px.line(df, x=df.index, y='z_rms_vel_rul', title='Z RMS Velocity RUL',
+                           labels={'z_rms_vel_rul': 'RUL (%)', 'index': 'Index'},
+                           color_discrete_sequence=['green'])
+            st.plotly_chart(fig_z, use_container_width=True)
 
-        def temp_rul():
-            plt.plot(df['temperature_rul'], label='Temperature RUL', color='r')
-            plt.title('Temperature RUL')
-            plt.xlabel('Index')
-            plt.ylabel('RUL (%)')
-            plt.legend()
-
-        def x_rul():
-            plt.plot(df['x_rms_vel_rul'], label='X RMS Velocity RUL', color='b')
-            plt.title('X RMS Velocity RUL')
-            plt.xlabel('Index')
-            plt.ylabel('RUL (%)')
-            plt.legend()
-
-        def z_rul():
-            plt.plot(df['z_rms_vel_rul'], label='Z RMS Velocity RUL', color='g')
-            plt.title('Z RMS Velocity RUL')
-            plt.xlabel('Index')
-            plt.ylabel('RUL (%)')
-            plt.legend()
-
-        col1.image(create_plot_image(temp_rul))
-        col2.image(create_plot_image(x_rul))
-        col3.image(create_plot_image(z_rul))
-
-    # RUL Prediction
+    # RUL Prediction (Interactive Bar Chart with Plotly)
     with st.expander("Predict RUL from Input"):
         temp = st.slider("Temperature", min_value=0.0, max_value=150.0, step=0.1)
         x_vel = st.slider("X RMS Velocity", min_value=0.0, max_value=1.5, step=0.01)
@@ -164,18 +154,21 @@ if df is not None:
             pred_z = max(0, 100 - (z_vel * 0.6) + np.random.uniform(-5, 5))
             cum_rul = min(pred_temp, pred_x, pred_z)
 
-            def plot_rul():
-                labels = ['Temperature', 'X RMS Velocity', 'Z RMS Velocity', 'Cumulative']
-                values = [pred_temp, pred_x, pred_z, cum_rul]
-                colors = ['red', 'blue', 'green', 'purple']
-                bars = plt.bar(labels, values, color=colors)
-                for bar in bars:
-                    height = bar.get_height()
-                    plt.text(bar.get_x() + bar.get_width()/2., height + 1, f'{height:.1f}%', ha='center')
-                plt.ylim(0, 100)
-                plt.title("Predicted RUL Comparison")
-                plt.ylabel("RUL (%)")
-            st.image(create_plot_image(plot_rul))
+            # Interactive bar chart
+            fig_rul = go.Figure(data=[
+                go.Bar(x=['Temperature', 'X RMS Velocity', 'Z RMS Velocity', 'Cumulative'],
+                       y=[pred_temp, pred_x, pred_z, cum_rul],
+                       marker_color=['red', 'blue', 'green', 'purple'],
+                       text=[f'{val:.1f}%' for val in [pred_temp, pred_x, pred_z, cum_rul]],
+                       textposition='auto')
+            ])
+            fig_rul.update_layout(
+                title="Predicted RUL Comparison",
+                yaxis_title="RUL (%)",
+                yaxis_range=[0, 100],
+                showlegend=False
+            )
+            st.plotly_chart(fig_rul, use_container_width=True)
 
             alert = ""
             if cum_rul < 10:
