@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 from PIL import Image
 import io
 
@@ -82,41 +83,18 @@ if df is not None:
 
     # Distributions (Vega-Lite Histogram)
     with st.expander("Distributions"):
-        # Prepare data for Vega-Lite (melt the dataframe for layered histograms)
-        melted_df = df[['temperature', 'x_rms_vel', 'z_rms_vel']].melt(var_name='metric', value_name='value')
-        
-        vega_spec = {
-            "layer": [
-                {
-                    "mark": {"type": "bar", "opacity": 0.6},
-                    "encoding": {
-                        "x": {
-                            "field": "value",
-                            "bin": {"maxbins": 50},
-                            "type": "quantitative",
-                            "title": "Value"
-                        },
-                        "y": {
-                            "aggregate": "count",
-                            "type": "quantitative",
-                            "title": "Count"
-                        },
-                        "color": {
-                            "field": "metric",
-                            "type": "nominal",
-                            "scale": {
-                                "domain": ["temperature", "x_rms_vel", "z_rms_vel"],
-                                "range": ["red", "blue", "green"]
-                            },
-                            "legend": {"title": "Metric"}
-                        }
-                    }
-                }
-            ],
-            "title": "Sensor Data Distributions",
-            "data": {"values": melted_df.to_dict('records')}
-        }
-        st.vega_lite_chart(vega_spec, use_container_width=True)
+        fig = go.Figure()
+        fig.add_trace(go.Histogram(x=df['temperature'], name='Temperature', nbinsx=50, marker_color='red', opacity=0.6))
+        fig.add_trace(go.Histogram(x=df['x_rms_vel'], name='X RMS Velocity', nbinsx=50, marker_color='blue', opacity=0.6))
+        fig.add_trace(go.Histogram(x=df['z_rms_vel'], name='Z RMS Velocity', nbinsx=50, marker_color='green', opacity=0.6))
+        fig.update_layout(
+            title="Sensor Data Distributions",
+            xaxis_title="Value",
+            yaxis_title="Count",
+            barmode='overlay',
+            hovermode='x unified'
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
     # Correlation Heatmap (Vega-Lite Heatmap)
     with st.expander("Correlation Heatmap"):
