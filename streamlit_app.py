@@ -15,6 +15,7 @@ thresholds = {}
 thresholds_rul = {}
 operating_hours_per_day = 16
 estimated_total_lifespan_hours = 5000
+maintenance_threshold = 25  # RUL percentage threshold for maintenance requirement
 
 # Load dataset function
 def load_dataset(uploaded_file):
@@ -235,5 +236,185 @@ if df is not None:
             """)
         else:
             st.info("Load data to view thresholds.")
+    
+    # Maintenance Period Predictor
+    with st.expander("Maintenance Period Predictor", expanded=True):
+        st.markdown("### Predict Days Until Next Maintenance")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Configurable parameters
+            user_operating_hours = st.slider("Daily Operating Hours", 
+                                            min_value=1, 
+                                            max_value=24, 
+                                            value=operating_hours_per_day,
+                                            help="Average number of hours the equipment operates per day")
+            
+            user_maint_threshold = st.slider("Maintenance Threshold (%)", 
+                                           min_value=5, 
+                                           max_value=50, 
+                                           value=maintenance_threshold,
+                                           help="RUL percentage at which maintenance is recommended")
+        
+        with col2:
+            current_rul_temp = None
+            current_rul_x = None
+            current_rul_z = None
+            
+            if df is not None and 'temperature_rul' in df.columns:
+                # Get latest RUL values (or averages of last few readings)
+                last_n = min(10, len(df))
+                current_rul_temp = df['temperature_rul'].tail(last_n).mean()
+                current_rul_x = df['x_rms_vel_rul'].tail(last_n).mean()
+                current_rul_z = df['z_rms_vel_rul'].tail(last_n).mean()
+                
+                st.markdown("### Current RUL Values")
+                st.markdown(f"- Temperature: {current_rul_temp:.1f}%")
+                st.markdown(f"- X RMS Velocity: {current_rul_x:.1f}%")
+                st.markdown(f"- Z RMS Velocity: {current_rul_z:.1f}%")
+            else:
+                st.info("Load data or predict RUL to estimate maintenance period")
+        
+        # Calculate maintenance prediction when user clicks the button
+        if st.button("Calculate Maintenance Period"):
+            if df is not None and 'temperature_rul' in df.columns:
+                # Use trend analysis to determine degradation rate
+                if len(df) > 30:
+                    # Calculate degradation rates (% per day)
+                    time_diff_days = (df['timestamp'].max() - df['timestamp'].min()).total_seconds() / (60 * 60 * 24)
+                    if time_diff_days > 0:
+                        temp_degradation_rate = abs((df['temperature_rul'].iloc[-1] - df['temperature_rul'].iloc[0]) / time_diff_days)
+                        x_degradation_rate = abs((df['x_rms_vel_rul'].iloc[-1] - df['x_rms_vel_rul'].iloc[0]) / time_diff_days)
+                        z_degradation_rate = abs((df['z_rms_vel_rul'].iloc[-1] - df['z_rms_vel_rul'].iloc[0]) / time_diff_days)
+                        
+                        # Use highest degradation rate to be conservative
+                        max_degradation_rate = max(temp_degradation_rate, x_degradation_rate, z_degradation_rate)
+                        
+                        # Add a small safety factor to account for accelerated degradation
+                        max_degradation_rate = max_degradation_rate * 1.1
+                        
+                        # Calculate days until maintenance threshold
+                        current_min_rul = min(current_rul_temp, current_rul_x, current_rul_z)
+                        
+                        if max_degradation_rate > 0:
+                            days_until_maintenance = (current_min_rul - user_maint_threshold) / max_degradation_rate
+                            days_until_maintenance = max(0, days_until_maintenance)
+                            
+                            # Create timeline visualization
+                            timeline_data = pd.DataFrame({
+                                'Event': ['Today', 'Maintenance Due'],
+                                'Days': [0, round(days_until_maintenance)],
+                                'RUL': [current_min_rul, user_maint_threshold]
+                            })
+                            
+                            fig = px.line(timeline_data, x='Days', y='RUL', markers=True,
+                                         labels={'Days': 'Days from Now', 'RUL': 'Remaining Useful Life (%)'},
+                                         title="Maintenance Timeline Forecast")
+                            
+                            fig.update_layout(
+                                annotations=[
+                                    dict(
+                                        x=x,
+                                        y=y,
+                                        text=event,
+                                        showarrow=True,
+                                        arrowhead=1,
+                                        ax=0,
+                                        ay=-40
+                                    ) for event, x, y in zip(timeline_data['Event'], timeline_data['Days'], timeline_data['RUL'])
+                                ]
+                            )
+                            
+                            # Add threshold reference line
+                            fig.add_shape(
+                                type="line",
+                                x0=0,
+                                y0=user_maint_threshold,
+                                x1=days_until_maintenance,
+                                y1=user_maint_threshold,
+                                line=dict(color="red", width=2, dash="dash"),
+                            )
+                            
+                            fig.update_layout(
+                                yaxis_range=[0, 100],
+                                xaxis_range=[-1, days_until_maintenance + 5],
+                                height=400
+                            )
+                            
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            # Show maintenance prediction
+                            maintenance_date = pd.Timestamp.now() + pd.Timedelta(days=days_until_maintenance)
+                            
+                            st.markdown(f"""
+                            ### Maintenance Prediction Results
+                            
+                            Based on the current degradation trends:
+                            
+                            - **Days until maintenance required:** {days_until_maintenance:.1f} days
+                            - **Estimated maintenance date:** {maintenance_date.strftime('%B %d, %Y')}
+                            - **Current minimum RUL:** {current_min_rul:.1f}%
+                            - **Maintenance threshold:** {user_maint_threshold}%
+                            - **Daily RUL degradation rate:** {max_degradation_rate:.2f}% per day
+                            
+                            """)
+                            
+                            # Add maintenance urgency indicator
+                            if days_until_maintenance < 7:
+                                st.error("⚠️ URGENT: Maintenance required within one week!")
+                            elif days_until_maintenance < 30:
+                                st.warning("⚠️ Plan for maintenance within the next month")
+                            else:
+                                st.success("✅ No immediate maintenance required")
+                        else:
+                            st.info("No significant degradation detected in the data")
+                    else:
+                        st.info("Insufficient time span in data to calculate degradation rate")
+                else:
+                    # If not enough data points, use manual input and simplified calculation
+                    st.info("Not enough data points for trend analysis. Using simplified estimation.")
+                    
+                    # Get current minimum RUL
+                    current_min_rul = min(current_rul_temp, current_rul_x, current_rul_z)
+                    
+                    # Estimate days based on a fixed degradation rate
+                    est_degradation_rate = 0.5  # % per day, conservative estimate
+                    days_until_maintenance = (current_min_rul - user_maint_threshold) / est_degradation_rate
+                    days_until_maintenance = max(0, days_until_maintenance)
+                    
+                    st.markdown(f"""
+                    ### Estimated Maintenance Period
+                    
+                    Based on conservative estimates:
+                    
+                    - **Days until maintenance required:** {days_until_maintenance:.1f} days
+                    - **Current minimum RUL:** {current_min_rul:.1f}%
+                    - **Maintenance threshold:** {user_maint_threshold}%
+                    - **Assumed daily degradation:** {est_degradation_rate}% per day
+                    
+                    Note: This is a simplified estimate. More data is needed for accurate prediction.
+                    """)
+            elif 'pred_temp' in locals() and 'pred_x' in locals() and 'pred_z' in locals():
+                # Use predicted values from manual input
+                current_min_rul = min(pred_temp, pred_x, pred_z)
+                
+                # Estimate days based on a fixed degradation rate
+                est_degradation_rate = 0.5  # % per day, conservative estimate
+                days_until_maintenance = (current_min_rul - user_maint_threshold) / est_degradation_rate
+                days_until_maintenance = max(0, days_until_maintenance)
+                
+                st.markdown(f"""
+                ### Estimated Maintenance Period
+                
+                Based on your manually input values:
+                
+                - **Days until maintenance required:** {days_until_maintenance:.1f} days
+                - **Current minimum RUL:** {current_min_rul:.1f}%
+                - **Maintenance threshold:** {user_maint_threshold}%
+                - **Assumed daily degradation:** {est_degradation_rate}% per day
+                """)
+            else:
+                st.error("Please predict RUL values first using the 'Predict RUL from Input' section")
 else:
     st.info("Upload data to get started.")
