@@ -794,11 +794,6 @@ with st.expander("Cost Optimization Analysis", expanded=True):
     - **Projected failure in**: {days_to_failure:.1f} days
     - **Optimal maintenance point**: {optimal_maintenance_day:.1f} days from now
     - **Recommended maintenance date**: {optimal_maintenance_date.strftime('%B %d, %Y')}
-    
-    **Cost Analysis:**
-    - Cost of preventive maintenance: ${cost_of_maintenance:,.2f}
-    - Cost of machine failure: ${cost_of_failure:,.2f}
-    - **Potential savings**: ${(cost_of_failure - cost_of_maintenance):,.2f}
     """)
 
 # Create a detailed health timeline plot
