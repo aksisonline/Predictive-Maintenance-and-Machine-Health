@@ -18,10 +18,11 @@ operating_hours_per_day = 16
 estimated_total_lifespan_hours = 5000
 maintenance_threshold = 25  # RUL percentage threshold for maintenance requirement
 current_date = datetime(2025, 4, 13)  # Current date: April 13, 2025
+data_source = "Sample"  # To track whether we're using sample or uploaded data
 
 # Function to generate sample data if no file is uploaded
 def generate_sample_data():
-    global df, thresholds, thresholds_rul
+    global df, thresholds, thresholds_rul, data_source
     
     # Create a timestamp range for the last 180 days
     start_date = current_date - timedelta(days=180)
@@ -77,33 +78,9 @@ def generate_sample_data():
     }
     
     df = pd.DataFrame(data)
+    data_source = "Sample"
     
-    # Calculate thresholds for all relevant parameters (95th percentile)
-    thresholds = {
-        'temperature': np.percentile(df['temperature'], 95),
-        'x_rms_vel': np.percentile(df['x_rms_vel'], 95),
-        'z_rms_vel': np.percentile(df['z_rms_vel'], 95),
-        'x_peak_vel': np.percentile(df['x_peak_vel'], 95),
-        'z_peak_vel': np.percentile(df['z_peak_vel'], 95),
-        'x_rms_accel': np.percentile(df['x_rms_accel'], 95),
-        'z_rms_accel': np.percentile(df['z_rms_accel'], 95),
-        'x_peak_accel': np.percentile(df['x_peak_accel'], 95),
-        'z_peak_accel': np.percentile(df['z_peak_accel'], 95)
-    }
-
-    # Define critical thresholds for RUL calculation
-    thresholds_rul = {
-        'temperature': 100,  # Critical temperature
-        'x_rms_vel': 0.5,    # mm/s (ISO 10816 standard)
-        'z_rms_vel': 0.5,    # mm/s
-        'x_peak_vel': 0.8,   # mm/s
-        'z_peak_vel': 0.8,   # mm/s
-        'x_rms_accel': 4.0,  # m/s² 
-        'z_rms_accel': 4.0,  # m/s²
-        'x_peak_accel': 6.0, # m/s²
-        'z_peak_accel': 6.0  # m/s²
-    }
-
+    calculate_thresholds()
     process_data()
     return df
 
@@ -153,9 +130,9 @@ def process_data():
     if valid_columns:
         df['health_index'] = sum(df[col] * weights[col] for col in valid_columns) / sum(weights[col] for col in valid_columns)
 
-# Load dataset function with file upload option (kept for backwards compatibility)
+# Load dataset function with file upload option
 def load_dataset(uploaded_file):
-    global df, thresholds, thresholds_rul
+    global df, thresholds, thresholds_rul, data_source, current_date
     try:
         # Read the Excel file directly with column names from first row
         df = pd.read_excel(uploaded_file)
@@ -174,36 +151,67 @@ def load_dataset(uploaded_file):
             "Z_Peak_Accel": "z_peak_accel"
         }
         
-        df.rename(columns=column_mapping, inplace=True)
+        # Convert all column names to strings to handle numeric column indices
+        df.columns = df.columns.astype(str)
+        
+        # Rename the columns that exist in the mapping
+        renamed_columns = {}
+        for old_col, new_col in column_mapping.items():
+            for col in df.columns:
+                if old_col.lower() in col.lower():
+                    renamed_columns[col] = new_col
+        
+        df.rename(columns=renamed_columns, inplace=True)
+        
+        # Make sure required columns exist
+        required_columns = ["timestamp", "temperature", "x_rms_vel", "z_rms_vel"]
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        if missing_columns:
+            return f"Error: Missing required columns: {', '.join(missing_columns)}"
+        
+        # Convert timestamp to datetime
         df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df = df.dropna()
-
+        df = df.dropna(subset=["timestamp"])  # Remove rows with missing timestamps
+        
+        # Sort by timestamp
+        df = df.sort_values("timestamp")
+        
+        # Handle missing values
+        df = df.fillna(method='ffill').fillna(method='bfill')  # Forward-fill then backward-fill
+        
+        # Set current date to the latest timestamp in the data if available
+        if not df.empty:
+            current_date = df["timestamp"].max()
+        
+        # Mark as uploaded data
+        data_source = "Uploaded"
+        
         # Calculate thresholds and process data
         calculate_thresholds()
         process_data()
 
-        st.success(f"Data loaded successfully! Dataset contains {len(df)} samples.")
+        return f"Data loaded successfully! Dataset contains {len(df)} samples from {df['timestamp'].min().strftime('%B %d, %Y')} to {df['timestamp'].max().strftime('%B %d, %Y')}"
     except Exception as e:
-        st.error(f"Error loading data: {str(e)}")
+        return f"Error loading data: {str(e)}"
 
 def calculate_thresholds():
     global df, thresholds, thresholds_rul
     
-    # Calculate thresholds for all relevant parameters (95th percentile)
-    thresholds = {
-        'temperature': np.percentile(df['temperature'], 95),
-        'x_rms_vel': np.percentile(df['x_rms_vel'], 95),
-        'z_rms_vel': np.percentile(df['z_rms_vel'], 95),
-        'x_peak_vel': np.percentile(df['x_peak_vel'], 95),
-        'z_peak_vel': np.percentile(df['z_peak_vel'], 95),
-        'x_rms_accel': np.percentile(df['x_rms_accel'], 95),
-        'z_rms_accel': np.percentile(df['z_rms_accel'], 95),
-        'x_peak_accel': np.percentile(df['x_peak_accel'], 95),
-        'z_peak_accel': np.percentile(df['z_peak_accel'], 95)
-    }
-
+    # Calculate thresholds for all parameters that exist in the dataframe
+    threshold_columns = [
+        'temperature', 'x_rms_vel', 'z_rms_vel', 'x_peak_vel', 'z_peak_vel',
+        'x_rms_accel', 'z_rms_accel', 'x_peak_accel', 'z_peak_accel'
+    ]
+    
+    thresholds = {}
+    for col in threshold_columns:
+        if col in df.columns:
+            thresholds[col] = np.percentile(df[col].dropna(), 95)
+    
     # Define critical thresholds for RUL calculation
-    thresholds_rul = {
+    # Use default values that can be overridden based on domain knowledge
+    default_thresholds_rul = {
         'temperature': 100,  # Critical temperature
         'x_rms_vel': 0.5,    # mm/s (ISO 10816 standard)
         'z_rms_vel': 0.5,    # mm/s
@@ -214,14 +222,33 @@ def calculate_thresholds():
         'x_peak_accel': 6.0, # m/s²
         'z_peak_accel': 6.0  # m/s²
     }
+    
+    # Only use thresholds for columns that exist in the dataframe
+    thresholds_rul = {k: v for k, v in default_thresholds_rul.items() if k in df.columns}
 
-# Generate sample data at startup
-df = generate_sample_data()
+# Add a sidebar for file upload
+st.sidebar.title("Data Input")
+uploaded_file = st.sidebar.file_uploader("Upload XLSX file with sensor data:", type="xlsx")
+
+data_load_state = st.sidebar.empty()
+
+# Generate sample data by default
+if df is None:
+    df = generate_sample_data()
+    data_load_state.info("Using sample data. Upload an Excel file to use your own data.")
+
+# Load data when file is uploaded
+if uploaded_file is not None:
+    result = load_dataset(uploaded_file)
+    if result.startswith("Error"):
+        data_load_state.error(result)
+    else:
+        data_load_state.success(result)
 
 # Main content layout
 st.title("Industrial Equipment Monitoring & RUL Prediction")
 st.markdown(f"### Current Date: {current_date.strftime('%B %d, %Y')}")
-st.markdown("#### Using automatically generated sample data for 180 days")
+st.markdown(f"#### Using {'uploaded data' if data_source == 'Uploaded' else 'sample data with 180 days of machine history'}")
 
 # Time Series Overview
 st.header("Time Series Analysis")
