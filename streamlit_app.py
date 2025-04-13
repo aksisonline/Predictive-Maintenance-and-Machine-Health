@@ -871,5 +871,3 @@ if df is not None:
                     st.error("Health index not available. Please load data with all required columns.")
 else:
     st.info("Upload data to get started.")
-</copilot-edited-file>
-```
